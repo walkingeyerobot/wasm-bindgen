@@ -286,7 +286,7 @@ impl ToTokens for ast::Struct {
                         fn #new_fn(ptr: u32) -> u32;
                     }
 
-                    #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten")))]
+                    #[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten"))))]
                     unsafe fn #new_fn(_: u32) -> u32 {
                         panic!("cannot convert to JsValue outside of the Wasm target")
                     }
@@ -1112,7 +1112,6 @@ impl ToTokens for ast::ImportType {
                             fn #instanceof_shim(val: u32) -> u32;
                         }
                         #[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten"))))]
-
                         unsafe fn #instanceof_shim(_: u32) -> u32 {
                             panic!("cannot check instanceof on non-wasm targets");
                         }
@@ -1901,6 +1900,7 @@ fn extern_fn(
 ) -> TokenStream {
     quote! {
         #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten")))]
+
         #(#attrs)*
         #[link(wasm_import_module = "__wbindgen_placeholder__")]
         extern "C" {

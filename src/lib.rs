@@ -76,6 +76,7 @@ use crate::convert::{FromWasmAbi, TryFromJsValue, WasmRet, WasmSlice};
 macro_rules! externs {
     ($(#[$attr:meta])* extern "C" { $(fn $name:ident($($args:tt)*) -> $ret:ty;)* }) => (
         #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten")))]
+
         $(#[$attr])*
         extern "C" {
             $(fn $name($($args)*) -> $ret;)*
@@ -83,6 +84,7 @@ macro_rules! externs {
 
         $(
             #[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten"))))]
+
             #[allow(unused_variables)]
             unsafe extern fn $name($($args)*) -> $ret {
                 panic!("function not implemented on non-wasm32 targets")
@@ -1409,6 +1411,7 @@ pub trait UnwrapThrowExt<T>: Sized {
         any(
             debug_assertions,
             not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten")))
+
         ),
         track_caller
     )]
@@ -1419,6 +1422,7 @@ pub trait UnwrapThrowExt<T>: Sized {
                 target_arch = "wasm32",
                 any(target_os = "unknown", target_os = "none", target_os = "emscripten")
             )
+
         )) {
             let loc = core::panic::Location::caller();
             let msg = alloc::format!(
@@ -1441,6 +1445,7 @@ pub trait UnwrapThrowExt<T>: Sized {
         any(
             debug_assertions,
             not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten")))
+
         ),
         track_caller
     )]
@@ -1455,6 +1460,7 @@ impl<T> UnwrapThrowExt<T> for Option<T> {
             target_arch = "wasm32",
             any(target_os = "unknown", target_os = "none", target_os = "emscripten")
         )) {
+
             if let Some(val) = self {
                 val
             } else if cfg!(debug_assertions) {
@@ -1476,6 +1482,7 @@ impl<T> UnwrapThrowExt<T> for Option<T> {
             target_arch = "wasm32",
             any(target_os = "unknown", target_os = "none", target_os = "emscripten")
         )) {
+
             if let Some(val) = self {
                 val
             } else if cfg!(debug_assertions) {
@@ -1509,6 +1516,7 @@ where
             target_arch = "wasm32",
             any(target_os = "unknown", target_os = "none", target_os = "emscripten")
         )) {
+
             match self {
                 Ok(val) => val,
                 Err(err) => {
@@ -1539,6 +1547,7 @@ where
             target_arch = "wasm32",
             any(target_os = "unknown", target_os = "none", target_os = "emscripten")
         )) {
+
             match self {
                 Ok(val) => val,
                 Err(err) => {
@@ -1914,6 +1923,7 @@ pub mod __rt {
             } else if #[cfg(all(
                 target_arch = "wasm32",
                 any(target_os = "unknown", target_os = "emscripten")
+
             ))] {
                 core::arch::wasm32::unreachable();
             } else {
@@ -2162,7 +2172,6 @@ pub mod __rt {
     }
 }
 
->>>>>>> 4b832708 (allow emscripten)
 /// A wrapper type around slices and vectors for binding the `Uint8ClampedArray`
 /// array in JS.
 ///
