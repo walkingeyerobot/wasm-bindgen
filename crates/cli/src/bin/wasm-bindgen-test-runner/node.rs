@@ -1,11 +1,13 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process;
 use std::process::Command;
 
 use anyhow::{Context, Error};
 
 use crate::Cli;
+use crate::Tests;
 
 // depends on the variable 'wasm' and initializes te WasmBindgenTestContext cx
 pub const SHARED_SETUP: &str = r#"
@@ -47,7 +49,7 @@ pub fn execute(
     module: &str,
     tmpdir: &Path,
     cli: Cli,
-    tests: &[String],
+    tests: Tests,
     module_format: bool,
     coverage: PathBuf,
 ) -> Result<(), Error> {
@@ -95,14 +97,14 @@ pub fn execute(
         coverage = coverage.display(),
         nocapture = cli.nocapture.clone(),
         console_override = SHARED_SETUP,
-        args = cli.into_args(),
+        args = cli.into_args(&tests),
     );
 
     // Note that we're collecting *JS objects* that represent the functions to
     // execute, and then those objects are passed into Wasm for it to execute
     // when it sees fit.
-    for test in tests {
-        js_to_execute.push_str(&format!("tests.push('{}')\n", test));
+    for test in tests.tests {
+        js_to_execute.push_str(&format!("tests.push('{}')\n", test.name));
     }
     // And as a final addendum, exit with a nonzero code if any tests fail.
     js_to_execute.push_str(
@@ -138,27 +140,17 @@ pub fn execute(
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
-    exec(
-        Command::new("node")
-            .env("NODE_PATH", env::join_paths(&path).unwrap())
-            .arg("--expose-gc")
-            .args(&extra_node_args)
-            .arg(&js_path),
-    )
-}
 
-#[cfg(unix)]
-pub fn exec(cmd: &mut Command) -> Result<(), Error> {
-    use std::os::unix::prelude::*;
-    Err(Error::from(cmd.exec()).context(format!(
-        "failed to execute `{}`",
-        cmd.get_program().to_string_lossy()
-    )))
-}
+    let status = Command::new("node")
+        .env("NODE_PATH", env::join_paths(&path).unwrap())
+        .arg("--expose-gc")
+        .args(&extra_node_args)
+        .arg(&js_path)
+        .status()?;
 
-#[cfg(windows)]
-pub fn exec(cmd: &mut Command) -> Result<(), Error> {
-    use std::process;
-    let status = cmd.status()?;
-    process::exit(status.code().unwrap_or(3));
+    if !status.success() {
+        process::exit(status.code().unwrap_or(1))
+    } else {
+        Ok(())
+    }
 }

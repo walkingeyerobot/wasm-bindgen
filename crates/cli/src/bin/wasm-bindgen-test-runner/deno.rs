@@ -1,15 +1,13 @@
-use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::{fs, process};
 
 use anyhow::{Context, Error};
 
-use crate::{
-    node::{exec, SHARED_SETUP},
-    Cli,
-};
+use crate::Tests;
+use crate::{node::SHARED_SETUP, Cli};
 
-pub fn execute(module: &str, tmpdir: &Path, cli: Cli, tests: &[String]) -> Result<(), Error> {
+pub fn execute(module: &str, tmpdir: &Path, cli: Cli, tests: Tests) -> Result<(), Error> {
     let mut js_to_execute = format!(
         r#"import * as wasm from "./{module}.js";
 
@@ -24,11 +22,11 @@ pub fn execute(module: &str, tmpdir: &Path, cli: Cli, tests: &[String]) -> Resul
     "#,
         nocapture = cli.nocapture.clone(),
         console_override = SHARED_SETUP,
-        args = cli.into_args(),
+        args = cli.into_args(&tests),
     );
 
-    for test in tests {
-        js_to_execute.push_str(&format!("tests.push('{}')\n", test));
+    for test in tests.tests {
+        js_to_execute.push_str(&format!("tests.push('{}')\n", test.name));
     }
 
     js_to_execute.push_str(
@@ -60,10 +58,15 @@ if (!ok) Deno.exit(1);"#,
             .arg(&js_path)
             .args(args),
     )*/
-    exec(
-        Command::new("deno")
-            .arg("run")
-            .arg("--allow-read")
-            .arg(&js_path),
-    )
+    let status = Command::new("deno")
+        .arg("run")
+        .arg("--allow-read")
+        .arg(&js_path)
+        .status()?;
+
+    if !status.success() {
+        process::exit(status.code().unwrap_or(1))
+    } else {
+        Ok(())
+    }
 }
