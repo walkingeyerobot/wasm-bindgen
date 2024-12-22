@@ -1,27 +1,13 @@
 //! See the README for `wasm-bindgen-test` for a bit more info about what's
 //! going on here.
 
-#![cfg_attr(
-    wasm_bindgen_unstable_test_coverage,
-    feature(allow_internal_unstable),
-    allow(internal_features)
-)]
-
 extern crate proc_macro;
 
 use proc_macro2::*;
-use quote::format_ident;
 use quote::quote;
 use quote::quote_spanned;
-use std::sync::atomic::*;
-
-static CNT: AtomicUsize = AtomicUsize::new(0);
 
 #[proc_macro_attribute]
-#[cfg_attr(
-    wasm_bindgen_unstable_test_coverage,
-    allow_internal_unstable(coverage_attribute)
-)]
 pub fn wasm_bindgen_test(
     attr: proc_macro::TokenStream,
     body: proc_macro::TokenStream,
@@ -90,7 +76,7 @@ pub fn wasm_bindgen_test(
         None => quote! { ::core::option::Option::None },
     };
 
-    let ignore = match ignore {
+    let ignore_par = match &ignore {
         Some(Some(lit)) => {
             quote! { ::core::option::Option::Some(::core::option::Option::Some(#lit)) }
         }
@@ -99,25 +85,24 @@ pub fn wasm_bindgen_test(
     };
 
     let test_body = if attributes.r#async {
-        quote! { cx.execute_async(test_name, #ident, #should_panic_par, #ignore); }
+        quote! { cx.execute_async(test_name, #ident, #should_panic_par, #ignore_par); }
     } else {
-        quote! { cx.execute_sync(test_name, #ident, #should_panic_par, #ignore); }
+        quote! { cx.execute_sync(test_name, #ident, #should_panic_par, #ignore_par); }
     };
 
-    // We generate a `#[no_mangle]` with a known prefix so the test harness can
-    // later slurp up all of these functions and pass them as arguments to the
-    // main test harness. This is the entry point for all tests.
-    let name = format_ident!("__wbgt_{}_{}", ident, CNT.fetch_add(1, Ordering::SeqCst));
+    let ignore_name = if ignore.is_some() { "$" } else { "" };
+
     let wasm_bindgen_path = attributes.wasm_bindgen_path;
     tokens.extend(
         quote! {
             const _: () = {
-                #[no_mangle]
-                #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "emscripten")))]
-                #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
-                pub extern "C" fn #name(cx: &#wasm_bindgen_path::__rt::Context) {
+                #wasm_bindgen_path::__rt::wasm_bindgen::__wbindgen_coverage! {
+                #[export_name = ::core::concat!("__wbgt_", #ignore_name, "_", ::core::module_path!(), "::", ::core::stringify!(#ident))]
+                #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten")))]
+                extern "C" fn __wbgt_test(cx: &#wasm_bindgen_path::__rt::Context) {
                     let test_name = ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident));
                     #test_body
+                }
                 }
             };
         },
@@ -125,7 +110,7 @@ pub fn wasm_bindgen_test(
 
     if let Some(path) = attributes.unsupported {
         tokens.extend(
-            quote! { #[cfg_attr(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "emscripten"))), #path)] },
+            quote! { #[cfg_attr(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten"))), #path)] },
         );
 
         if let Some(should_panic) = should_panic {
@@ -136,7 +121,19 @@ pub fn wasm_bindgen_test(
             };
 
             tokens.extend(
-                quote! { #[cfg_attr(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "emscripten"))), #should_panic)] }
+                quote! { #[cfg_attr(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten"))), #should_panic)] }
+            )
+        }
+
+        if let Some(ignore) = ignore {
+            let ignore = if let Some(lit) = ignore {
+                quote! { ignore = #lit }
+            } else {
+                quote! { ignore }
+            };
+
+            tokens.extend(
+                quote! { #[cfg_attr(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten"))), #ignore)] }
             )
         }
     }

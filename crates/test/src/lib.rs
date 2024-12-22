@@ -2,7 +2,10 @@
 //!
 //! More documentation can be found in the README for this crate!
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
+
+extern crate alloc;
 
 pub use wasm_bindgen_test_macro::wasm_bindgen_test;
 

@@ -1,5 +1,7 @@
 use std::char;
 
+use crate::js::identifier::is_valid_ident;
+
 macro_rules! tys {
     ($($a:ident)*) => (tys! { @ ($($a)*) 0 });
     (@ () $v:expr) => {};
@@ -19,6 +21,8 @@ tys! {
     U32
     I64
     U64
+    I128
+    U128
     F32
     F64
     BOOLEAN
@@ -55,6 +59,8 @@ pub enum Descriptor {
     U32,
     I64,
     U64,
+    I128,
+    U128,
     F32,
     F64,
     Boolean,
@@ -132,11 +138,13 @@ impl Descriptor {
             I16 => Descriptor::I16,
             I32 => Descriptor::I32,
             I64 => Descriptor::I64,
+            I128 => Descriptor::I128,
             U8 if clamped => Descriptor::ClampedU8,
             U8 => Descriptor::U8,
             U16 => Descriptor::U16,
             U32 => Descriptor::U32,
             U64 => Descriptor::U64,
+            U128 => Descriptor::U128,
             F32 => Descriptor::F32,
             F64 => Descriptor::F64,
             BOOLEAN => Descriptor::Boolean,
@@ -300,7 +308,11 @@ impl VectorKind {
             VectorKind::F64 => "Float64Array".to_string(),
             VectorKind::Externref => "any[]".to_string(),
             VectorKind::NamedExternref(ref name) => {
-                format!("({})[]", name)
+                if is_valid_ident(name.as_str()) {
+                    format!("{}[]", name)
+                } else {
+                    format!("({})[]", name)
+                }
             }
         }
     }

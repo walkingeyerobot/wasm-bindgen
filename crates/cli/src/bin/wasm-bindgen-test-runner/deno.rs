@@ -1,39 +1,32 @@
-use std::ffi::OsString;
-use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::{fs, process};
 
 use anyhow::{Context, Error};
 
-use crate::node::{exec, SHARED_SETUP};
+use crate::Tests;
+use crate::{node::SHARED_SETUP, Cli};
 
-pub fn execute(
-    module: &str,
-    tmpdir: &Path,
-    args: &[OsString],
-    tests: &[String],
-) -> Result<(), Error> {
+pub fn execute(module: &str, tmpdir: &Path, cli: Cli, tests: Tests) -> Result<(), Error> {
     let mut js_to_execute = format!(
-        r#"import * as wasm from "./{0}.js";
+        r#"import * as wasm from "./{module}.js";
 
+        const nocapture = {nocapture};
         {console_override}
 
         window.__wbg_test_invoke = f => f();
 
-        // Forward runtime arguments. These arguments are also arguments to the
-        // `wasm-bindgen-test-runner` which forwards them to deno which we
-        // forward to the test harness. this is basically only used for test
-        // filters for now.
-        cx.args(Deno.args);
+        {args}
 
         const tests = [];
     "#,
-        module,
+        nocapture = cli.nocapture.clone(),
         console_override = SHARED_SETUP,
+        args = cli.into_args(&tests),
     );
 
-    for test in tests {
-        js_to_execute.push_str(&format!("tests.push('{}')\n", test));
+    for test in tests.tests {
+        js_to_execute.push_str(&format!("tests.push('{}')\n", test.name));
     }
 
     js_to_execute.push_str(
@@ -65,11 +58,15 @@ if (!ok) Deno.exit(1);"#,
             .arg(&js_path)
             .args(args),
     )*/
-    exec(
-        Command::new("deno")
-            .arg("run")
-            .arg("--allow-read")
-            .arg(&js_path)
-            .args(args),
-    )
+    let status = Command::new("deno")
+        .arg("run")
+        .arg("--allow-read")
+        .arg(&js_path)
+        .status()?;
+
+    if !status.success() {
+        process::exit(status.code().unwrap_or(1))
+    } else {
+        Ok(())
+    }
 }

@@ -52,6 +52,9 @@ pub struct Context {
 
     // The externref table we'll be using, injected after construction
     table: Option<TableId>,
+
+    // If the bulk memory proposal is enabled.
+    bulk_memory: bool,
 }
 
 pub struct Meta {
@@ -104,6 +107,11 @@ impl Context {
         // Insert reference types to the target features section.
         wasm_bindgen_wasm_conventions::insert_target_feature(module, "reference-types")
             .context("failed to parse `target_features` custom section")?;
+
+        self.bulk_memory = matches!(
+            wasm_bindgen_wasm_conventions::target_feature(module, "bulk-memory"),
+            Ok(true)
+        );
 
         // Figure out what the maximum index of functions pointers are. We'll
         // be adding new entries to the function table later (maybe) so
@@ -293,12 +301,6 @@ impl Transform<'_> {
         assert!(self.cx.exports.is_empty());
         self.process_elements(module)?;
         assert!(self.cx.new_elements.is_empty());
-
-        // If we didn't actually transform anything, no need to inject or
-        // rewrite anything from below.
-        if self.shims.is_empty() {
-            return Ok(());
-        }
 
         // Perform all instruction transformations to rewrite calls between
         // functions and make sure everything is still hooked up right.
@@ -671,11 +673,23 @@ impl Transform<'_> {
         // that the table doesn't accidentally hold a strong reference to items
         // no longer in use by our Wasm instance.
         if externref_stack > 0 {
+            if self.cx.bulk_memory {
+                body.local_get(fp)
+                    .ref_null(RefType::Externref)
+                    .i32_const(externref_stack)
+                    .table_fill(self.table);
+            } else {
+                for i in 0..externref_stack {
+                    body.local_get(fp);
+                    if i > 0 {
+                        body.i32_const(i).binop(BinaryOp::I32Add);
+                    }
+                    body.ref_null(RefType::Externref);
+                    body.table_set(self.table);
+                }
+            }
+
             body.local_get(fp)
-                .ref_null(RefType::Externref)
-                .i32_const(externref_stack)
-                .table_fill(self.table)
-                .local_get(fp)
                 .i32_const(externref_stack)
                 .binop(BinaryOp::I32Add)
                 .global_set(self.stack_pointer);
