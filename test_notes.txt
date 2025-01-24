@@ -1,0 +1,22 @@
+error: failed to find intrinsics to enable `clone_ref` function
+non-wasm-test.rs
+
+error: cannot shadow already defined class `A`
+non-wasm.rs
+
+cp: cannot stat './wbg_out/a.wasm': No such file or directory
+must_use.rs
+std-crate-no-std-dep.rs
+unwrap_throw.rs
+
+failed to find entry in function table: failed to find `32795` in function table
+headless/
+wasm/
+
+failed to find entry in function table: failed to find `32752` in function table
+impl Context from mod.rs L274-L405
+
+the error manifests slightly differently when we comment this part out.
+thread 'main' panicked at crates/externref-xform/src/lib.rs:441:56:
+          index out of bounds: the len is 881 but the index is 32719
+seems related. This is coming from __wbgtest_console_log function in mod.rs

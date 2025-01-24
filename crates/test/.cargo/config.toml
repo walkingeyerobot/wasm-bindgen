@@ -1,0 +1,5 @@
+[build]
+rustflags = [
+    #"-Clink-arg-bin=emcc=-sERROR_ON_UNDEFINED_SYMBOLS=0",
+    "-Cllvm-args=-enable-emscripten-cxx-exceptions=0",                                                                                                                                                                                                                                      
+]
