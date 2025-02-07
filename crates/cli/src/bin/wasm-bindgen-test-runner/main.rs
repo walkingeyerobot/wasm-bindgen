@@ -18,6 +18,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::exit;
 use std::thread;
 use wasm_bindgen_cli_support::Bindgen;
 
@@ -111,21 +112,30 @@ fn main() -> anyhow::Result<()> {
 
     let shell = shell::Shell::new();
 
-    let file_name = cli
+    let mut file_name = cli
         .file
         .file_name()
         .map(Path::new)
         .context("file to test is not a valid file, can't extract file name")?;
 
+    let mut file_name_buf= PathBuf::from(cli.file.clone());
+    println!("{:?}", file_name.extension().unwrap());
+    if file_name.extension().unwrap() == "js" {
+        file_name_buf.pop();
+        file_name_buf.push(file_name.file_stem().unwrap());
+        file_name_buf.set_extension("wasm");
+        file_name = Path::new(&file_name_buf);
+    }
     // Collect all tests that the test harness is supposed to run. We assume
     // that any exported function with the prefix `__wbg_test` is a test we need
     // to execute.
-    let wasm = fs::read(&cli.file).context("failed to read Wasm file")?;
+    let wasm = fs::read(&file_name_buf).context("failed to read Wasm file")?;
     let mut wasm =
         walrus::Module::from_buffer(&wasm).context("failed to deserialize Wasm module")?;
     let mut tests = Tests::new();
 
     'outer: for export in wasm.exports.iter() {
+//        println!("test names: {}", export.name);
         let Some(name) = export.name.strip_prefix("__wbgt_") else {
             continue;
         };
@@ -260,7 +270,7 @@ fn main() -> anyhow::Result<()> {
         );
         return Ok(());
     }
-
+    println!("================sanity check...");
     let driver_timeout = env::var("WASM_BINDGEN_TEST_DRIVER_TIMEOUT")
         .map(|timeout| {
             timeout
@@ -311,7 +321,8 @@ fn main() -> anyhow::Result<()> {
         .generate(&tmpdir)
         .context("executing `wasm-bindgen` over the Wasm file")?;
     shell.clear();
-
+    println!("Tempdir is at :{:?}", tmpdir.path());
+    //exit(2);
     match test_mode {
         TestMode::Node { no_modules } => {
             node::execute(module, tmpdir.path(), cli, tests, !no_modules, coverage)?
