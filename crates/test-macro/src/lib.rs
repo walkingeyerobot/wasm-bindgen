@@ -97,10 +97,10 @@ pub fn wasm_bindgen_test(
         quote! {
             const _: () = {
                 #wasm_bindgen_path::__rt::wasm_bindgen::__wbindgen_coverage! {
-                #[export_name = ::core::concat!("__wbgt_", #ignore_name, "_", ::core::module_path!(), "::", ::core::stringify!(#ident))]
+                #[export_name = ::core::concat!("__wbgt_", #ignore_name, "_", ::core::module_path!(), "_", ::core::stringify!(#ident))]
                 #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten")))]
                 extern "C" fn __wbgt_test(cx: &#wasm_bindgen_path::__rt::Context) {
-                    let test_name = ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident));
+                    let test_name = ::core::concat!(::core::module_path!(), "_", ::core::stringify!(#ident));
                     #test_body
                 }
                 }

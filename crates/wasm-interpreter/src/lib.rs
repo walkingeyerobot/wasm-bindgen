@@ -21,7 +21,9 @@
 use anyhow::{bail, ensure};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use walrus::ir::Instr;
-use walrus::{ElementId, FunctionId, LocalId, Module, TableId};
+use walrus::{
+    ConstExpr, ElementId, FunctionId, GlobalKind, LocalId, Module, ModuleGlobals, TableId,
+};
 
 /// A ready-to-go interpreter of a Wasm module.
 ///
@@ -240,7 +242,7 @@ impl Interpreter {
         }
 
         for (instr, _) in block.instrs.iter() {
-            if let Err(err) = frame.eval(instr) {
+            if let Err(err) = frame.eval(instr, &module.globals) {
                 if let Some(name) = &module.funcs.get(id).name {
                     panic!("{name}: {err}")
                 } else {
@@ -264,7 +266,7 @@ struct Frame<'a> {
 }
 
 impl Frame<'_> {
-    fn eval(&mut self, instr: &Instr) -> anyhow::Result<()> {
+    fn eval(&mut self, instr: &Instr, globals: &ModuleGlobals) -> anyhow::Result<()> {
         use walrus::ir::*;
 
         let stack = &mut self.interp.scratch;
@@ -285,7 +287,28 @@ impl Frame<'_> {
             }
 
             // Blindly assume all globals are the stack pointer
-            Instr::GlobalGet(_) => stack.push(self.interp.sp),
+            Instr::GlobalGet(e) => {
+                let global = globals.get(e.global);
+                // We have a local stack pointer, so we can just push that.
+                if global.name == Some("__stack_pointer".to_owned()) {
+                    stack.push(self.interp.sp);
+                } else if let GlobalKind::Local(const_expr) = global.kind {
+                    match const_expr {
+                        ConstExpr::Value(Value::I32(i32_const)) => {
+                            stack.push(i32_const);
+                        }
+                        _ => {
+                            // TODO - can we bail here? Is there anything else than i32 we'd
+                            // consider valid?
+                            stack.push(self.interp.sp);
+                        }
+                    }
+                } else {
+                    // TODO - likely we can bail here too, but check first.
+                    // Blindly assume all globals are the stack pointer
+                    stack.push(self.interp.sp);
+                }
+            }
             Instr::GlobalSet(_) => {
                 let val = stack.pop().unwrap();
                 self.interp.sp = val;
@@ -366,25 +389,17 @@ impl Frame<'_> {
                 // ... otherwise this is a normal call so we recurse.
                 } else {
                     // Skip profiling related functions which we don't want to interpret.
-                    if self
-                        .module
-                        .funcs
-                        .get(func)
-                        .name
-                        .as_ref()
-                        .is_some_and(|name| {
-                            name.starts_with("__llvm_profile_init")
-                                || name.starts_with("__llvm_profile_register_function")
-                                || name.starts_with("__llvm_profile_register_function")
-                        })
-                    {
+                    if self.module.funcs.get(func).name.as_ref().is_some_and(|name| {
+                        name.starts_with("__llvm_profile_init")
+                            || name.starts_with("__llvm_profile_register_function")
+                            || name.starts_with("__llvm_profile_register_function")
+                    }) {
                         return Ok(());
                     }
 
                     let ty = self.module.types.get(self.module.funcs.get(func).ty());
-                    let args = (0..ty.params().len())
-                        .map(|_| stack.pop().unwrap())
-                        .collect::<Vec<_>>();
+                    let args =
+                        (0..ty.params().len()).map(|_| stack.pop().unwrap()).collect::<Vec<_>>();
 
                     self.interp.call(func, self.module, &args);
                 }
