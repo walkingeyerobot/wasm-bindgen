@@ -987,11 +987,17 @@ __wbg_set_wasm(wasm);"
             OutputMode::Emscripten => {
             let mut global_emscripten_initializer: String = Default::default();
             for global_dep in self.emscripten_deps.iter() {
-                let mut global = "";
+                let mut global: String = "".to_string();
                 if global_dep == "'$WASM_VECTOR_LEN'" {
-                    global = "$WASM_VECTOR_LEN: '0',";
+                    global = "$WASM_VECTOR_LEN: '0',".to_string();
                 } else if global_dep == "'$TextEncoder'" {
-                    global = "$textEncoder: \"new TextEncoder()\",";
+                    global = "$textEncoder: \"new TextEncoder()\",".to_string();
+                } else if global_dep == "'$heap'" {
+                    global = format!("
+                    $heap: \"new Array({}).fill(undefined)\",
+                    \"heap.push({})\",", INITIAL_HEAP_OFFSET, INITIAL_HEAP_VALUES.join(", "));
+                } else if global_dep == "'$stack_pointer'" {
+                    global = format!("$stack_pointer : \"{}\",", INITIAL_HEAP_OFFSET)
                 }
 
                 if !global.is_empty() {
@@ -1435,7 +1441,9 @@ __wbg_set_wasm(wasm);"
         }
     }
 
-    fn expose_drop_ref(&mut self) {
+    fn expose_drop_ref(&mut self, import_deps: &mut HashSet<String>) {
+        let func_name = "dropObject";
+        import_deps.insert(format!("'${func_name}'"));
         if !self.should_write_global("drop_ref") {
             return;
         }
@@ -1450,16 +1458,14 @@ __wbg_set_wasm(wasm);"
         //
         // Otherwise the free operation here is pretty simple, just appending to
         // the linked list of heap slots that are free.
-        self.global(&format!(
+        self.write_js_function(&format!(
             "
-            function dropObject(idx) {{
                 if (idx < {}) return;
                 heap[idx] = heap_next;
                 heap_next = idx;
-            }}
             ",
             INITIAL_HEAP_OFFSET + INITIAL_HEAP_VALUES.len(),
-        ));
+        ), "dropObject", "(idx)", &[]);
     }
 
     fn expose_global_heap(&mut self) {
@@ -1467,6 +1473,10 @@ __wbg_set_wasm(wasm);"
             return;
         }
         assert!(!self.config.externref);
+        if matches!(self.config.mode, OutputMode::Emscripten) {
+            self.emscripten_deps.insert("'$heap'".to_string());
+            return;
+        }
         self.global(&format!(
             "const heap = new Array({}).fill(undefined);",
             INITIAL_HEAP_OFFSET
@@ -1482,7 +1492,9 @@ __wbg_set_wasm(wasm);"
         self.global("let heap_next = heap.length;");
     }
 
-    fn expose_get_object(&mut self) {
+    fn expose_get_object(&mut self, import_deps: &mut HashSet<String>) {
+        let func_name = "getObject";
+        import_deps.insert(format!("'$_{func_name}'"));
         if !self.should_write_global("get_object") {
             return;
         }
@@ -1500,44 +1512,48 @@ __wbg_set_wasm(wasm);"
         self.global("function notDefined(what) { return () => { throw new Error(`${what} is not defined`); }; }");
     }
 
-    fn expose_assert_num(&mut self) {
+    fn expose_assert_num(&mut self, import_deps: &mut HashSet<String>) {
+        let func_name = "_assertNum";
+        import_deps.insert(format!("'$_{func_name}'"));
         if !self.should_write_global("assert_num") {
             return;
         }
-        self.global(
+        self.write_js_function(
             "
-            function _assertNum(n) {
                 if (typeof(n) !== 'number') throw new Error(`expected a number argument, found ${typeof(n)}`);
-            }
-            ",
+            ", func_name, "(n)", &[]
         );
     }
 
-    fn expose_assert_bigint(&mut self) {
+    fn expose_assert_bigint(&mut self, import_deps: &mut HashSet<String>) {
+        let func_name = "_assertBigInt";
+        import_deps.insert(format!("'$_{func_name}'"));
         if !self.should_write_global("assert_bigint") {
             return;
         }
-        self.global(
+        self.write_js_function(
             "
             function _assertBigInt(n) {
                 if (typeof(n) !== 'bigint') throw new Error(`expected a bigint argument, found ${typeof(n)}`);
             }
-            ",
+            ", func_name, "(n)", &[]
         );
     }
 
-    fn expose_assert_bool(&mut self) {
+    fn expose_assert_bool(&mut self, import_deps: &mut HashSet<String>) {
+        let func_name = "_assertBoolean";
+        import_deps.insert(format!("'$_{func_name}'"));
         if !self.should_write_global("assert_bool") {
             return;
         }
-        self.global(
+        self.write_js_function(
             "
             function _assertBoolean(n) {
                 if (typeof(n) !== 'boolean') {
                     throw new Error(`expected a boolean argument, found ${typeof(n)}`);
                 }
             }
-            ",
+            ", func_name, "(n)", &[]
         );
     }
 
@@ -1842,7 +1858,7 @@ __wbg_set_wasm(wasm);"
             }
             _ => {
                 self.expose_add_heap_object();
-                self.global(&format!(
+                self.write_js_function(&format!(
                     "
                         function {ret}(array, malloc) {{
                             const ptr = malloc(array.length * 4, 4) >>> 0;
@@ -1854,7 +1870,11 @@ __wbg_set_wasm(wasm);"
                             return ptr;
                         }}
                     ",
-                ));
+                    ),
+                    &format!("{ret}"),
+                    "(array, malloc)",
+                    &["'$addHeapObject'".to_string(), "'$WASM_VECTOR_LEN'".to_string()],
+                 );
             }
         }
         Ok(ret)
@@ -1875,19 +1895,20 @@ __wbg_set_wasm(wasm);"
             return Ok(ret);
         }
         self.expose_wasm_vector_len(import_deps);
-        self.global(&format!(
+        let view_formatted = if matches!(self.config.mode, OutputMode::Emscripten) {
+            "HEAP8"
+        } else {
+            &format!("{view}()") 
+        };
+        self.write_js_function(
+            &format!(
             "
-            function {}(arg, malloc) {{
                 const ptr = malloc(arg.length * {size}, {size}) >>> 0;
-                {}().set(arg, ptr / {size});
+                {}.set(arg, ptr / {size});
                 WASM_VECTOR_LEN = arg.length;
                 return ptr;
-            }}
-            ",
-            ret,
-            view,
-            size = size
-        ));
+            ", view_formatted, size = size), &format!("{ret}"), "(arg, malloc)", 
+            &["'$WASM_VECTOR_LEN'".to_string()]);
         Ok(ret)
     }
 
@@ -2038,11 +2059,12 @@ __wbg_set_wasm(wasm);"
         &mut self,
         memory: MemoryId,
         table: Option<TableId>,
+        import_deps: &mut HashSet<String>
     ) -> Result<MemView, Error> {
         let get_object = if let Some(table) = table {
             self.expose_get_from_externref_table(table)?.to_string()
         } else {
-            self.expose_get_object();
+            self.expose_get_object(import_deps);
             "getObject".to_string()
         };
         let get_string = self.expose_get_string_from_wasm(memory)?;
@@ -2063,7 +2085,7 @@ __wbg_set_wasm(wasm);"
         //
         // If `ptr` and `len` are both `0` then that means it's `None`, in that case we rely upon
         // the fact that `getObject(0)` is guaranteed to be `undefined`.
-        self.global(&format!(
+        self.write_js_function(&format!(
             "
             function {name}(ptr, len) {{
                 if (ptr === 0) {{
@@ -2076,28 +2098,34 @@ __wbg_set_wasm(wasm);"
             name = ret,
             get_string = get_string,
             get_object = get_object
-        ));
+        ), &format!("{ret}"), "(ptr, len)", 
+        &[format!("'${get_object}'"), format!("'${get_string}'")]);
         Ok(ret)
     }
 
-    fn expose_get_array_js_value_from_wasm(&mut self, memory: MemoryId) -> Result<MemView, Error> {
+    fn expose_get_array_js_value_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> Result<MemView, Error> {
         let mem = self.expose_dataview_memory(memory);
         let ret = MemView {
             name: "getArrayJsValueFromWasm".into(),
             num: mem.num,
         };
+        import_deps.insert(format!("'${ret}'"));
         if !self.should_write_global(ret.to_string()) {
             return Ok(ret);
         }
+        let mem_formatted = if matches!(self.config.mode, OutputMode::Emscripten) {
+             format!("{mem}()")
+        } else {
+            "HEAP_DATA_VIEW".to_string()
+        };
         match (self.aux.externref_table, self.aux.externref_drop_slice) {
             (Some(table), Some(drop)) => {
                 let table = self.export_name_of(table);
                 let drop = self.export_name_of(drop);
-                self.global(&format!(
+                self.write_js_function(&format!(
                     "
-                    function {}(ptr, len) {{
                         ptr = ptr >>> 0;
-                        const mem = {}();
+                        const mem = {};
                         const result = [];
                         for (let i = ptr; i < ptr + 4 * len; i += 4) {{
                             result.push(wasm.{}.get(mem.getUint32(i, true)));
@@ -2106,16 +2134,16 @@ __wbg_set_wasm(wasm);"
                         return result;
                     }}
                     ",
-                    ret, mem, table, drop,
-                ));
+                    mem_formatted, table, drop
+                ), &format!("{ret}"), "(ptr, len)", 
+                &[format!("'${table}'"), format!("'${drop}'")]);
             }
             _ => {
-                self.expose_take_object();
-                self.global(&format!(
+                self.expose_take_object(import_deps);
+                self.write_js_function(&format!(
                     "
-                    function {}(ptr, len) {{
                         ptr = ptr >>> 0;
-                        const mem = {}();
+                        const mem = {};
                         const result = [];
                         for (let i = ptr; i < ptr + 4 * len; i += 4) {{
                             result.push(takeObject(mem.getUint32(i, true)));
@@ -2123,69 +2151,70 @@ __wbg_set_wasm(wasm);"
                         return result;
                     }}
                     ",
-                    ret, mem,
-                ));
+                    mem_formatted,
+                ), &format!("{ret}"), "(ptr, len)", 
+                &[format!("'$takeObject'")]);
             }
         }
         Ok(ret)
     }
 
-    fn expose_get_array_i8_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_i8_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_int8_memory(memory);
-        self.arrayget("getArrayI8FromWasm", view, 1)
+        self.arrayget("getArrayI8FromWasm", view, 1, import_deps)
     }
 
-    fn expose_get_array_u8_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_u8_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_uint8_memory(memory);
-        self.arrayget("getArrayU8FromWasm", view, 1)
+        self.arrayget("getArrayU8FromWasm", view, 1, import_deps)
     }
 
-    fn expose_get_clamped_array_u8_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_clamped_array_u8_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_clamped_uint8_memory(memory);
-        self.arrayget("getClampedArrayU8FromWasm", view, 1)
+        self.arrayget("getClampedArrayU8FromWasm", view, 1, import_deps)
     }
 
-    fn expose_get_array_i16_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_i16_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_int16_memory(memory);
-        self.arrayget("getArrayI16FromWasm", view, 2)
+        self.arrayget("getArrayI16FromWasm", view, 2, import_deps)
     }
 
-    fn expose_get_array_u16_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_u16_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_uint16_memory(memory);
-        self.arrayget("getArrayU16FromWasm", view, 2)
+        self.arrayget("getArrayU16FromWasm", view, 2, import_deps)
     }
 
-    fn expose_get_array_i32_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_i32_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_int32_memory(memory);
-        self.arrayget("getArrayI32FromWasm", view, 4)
+        self.arrayget("getArrayI32FromWasm", view, 4, import_deps)
     }
 
-    fn expose_get_array_u32_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_u32_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_uint32_memory(memory);
-        self.arrayget("getArrayU32FromWasm", view, 4)
+        self.arrayget("getArrayU32FromWasm", view, 4, import_deps)
     }
 
-    fn expose_get_array_i64_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_i64_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_int64_memory(memory);
-        self.arrayget("getArrayI64FromWasm", view, 8)
+        self.arrayget("getArrayI64FromWasm", view, 8, import_deps)
     }
 
-    fn expose_get_array_u64_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_u64_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_uint64_memory(memory);
-        self.arrayget("getArrayU64FromWasm", view, 8)
+        self.arrayget("getArrayU64FromWasm", view, 8, import_deps)
     }
 
-    fn expose_get_array_f32_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_f32_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_f32_memory(memory);
-        self.arrayget("getArrayF32FromWasm", view, 4)
+        self.arrayget("getArrayF32FromWasm", view, 4, import_deps)
     }
 
-    fn expose_get_array_f64_from_wasm(&mut self, memory: MemoryId) -> MemView {
+    fn expose_get_array_f64_from_wasm(&mut self, memory: MemoryId, import_deps: &mut HashSet<String>) -> MemView {
         let view = self.expose_f64_memory(memory);
-        self.arrayget("getArrayF64FromWasm", view, 8)
+        self.arrayget("getArrayF64FromWasm", view, 8, import_deps)
     }
 
-    fn arrayget(&mut self, name: &'static str, view: MemView, size: usize) -> MemView {
+    fn arrayget(&mut self, name: &'static str, view: MemView, size: usize, import_deps: &mut HashSet<String>) -> MemView {
         let ret = MemView {
             name: name.into(),
             num: view.num,
@@ -2193,17 +2222,20 @@ __wbg_set_wasm(wasm);"
         if !self.should_write_global(name) {
             return ret;
         }
-        self.global(&format!(
+        let mem = if matches!(self.config.mode, OutputMode::Emscripten) {
+            format!("{view}()")
+        } else {
+            "HEAP8".to_string()
+        };
+        import_deps.insert(format!("'${ret}'"));
+        self.write_js_function(&format!(
             "
-            function {name}(ptr, len) {{
                 ptr = ptr >>> 0;
-                return {mem}().subarray(ptr / {size}, ptr / {size} + len);
-            }}
+                return {mem}.subarray(ptr / {size}, ptr / {size} + len);
             ",
-            name = ret,
-            mem = view,
+            mem = mem,
             size = size,
-        ));
+        ),  &format!("{ret}"), "(ptr, len)", &[]);
         ret
     }
 
@@ -2332,18 +2364,18 @@ __wbg_set_wasm(wasm);"
         }
     }
 
-    fn expose_assert_class(&mut self) {
+    fn expose_assert_class(&mut self, import_deps: &mut HashSet<String>) {
+        let func_name = "_assertClass";
+        import_deps.insert(format!("'${func_name}'"));
         if !self.should_write_global("assert_class") {
             return;
         }
-        self.global(
+        self.write_js_function(
             "
-            function _assertClass(instance, klass) {
                 if (!(instance instanceof klass)) {
                     throw new Error(`expected instance of ${klass.name}`);
                 }
-            }
-            ",
+            ", func_name, "(instance, klass)", &[],
         );
     }
 
@@ -2351,10 +2383,16 @@ __wbg_set_wasm(wasm);"
         if !self.should_write_global("stack_pointer") {
             return;
         }
+        if matches!(self.config.mode, OutputMode::Emscripten) {
+            self.emscripten_deps.insert("'$stack_pointer'".to_string());
+            return;
+        }
         self.global(&format!("let stack_pointer = {};", INITIAL_HEAP_OFFSET));
     }
 
-    fn expose_borrowed_objects(&mut self) {
+    fn expose_borrowed_objects(&mut self, import_deps: &mut HashSet<String>) {
+        let func_name = "addBorrowedObject";
+        import_deps.insert(format!("'${func_name}'"));
         if !self.should_write_global("borrowed_objects") {
             return;
         }
@@ -2365,31 +2403,29 @@ __wbg_set_wasm(wasm);"
         // after executing this. Once we've reserved stack space we write the
         // value. Eventually underflow will throw an exception, but JS sort of
         // just handles it today...
-        self.global(
+        self.write_js_function(
             "
-            function addBorrowedObject(obj) {
                 if (stack_pointer == 1) throw new Error('out of js stack');
                 heap[--stack_pointer] = obj;
                 return stack_pointer;
-            }
-            ",
+            ", func_name, "(obj)", &[]
         );
     }
 
-    fn expose_take_object(&mut self) {
+    fn expose_take_object(&mut self, import_deps: &mut HashSet<String>) {
+        let func_name = "takeObject";
+        import_deps.insert(format!("'${func_name}'"));
         if !self.should_write_global("take_object") {
             return;
         }
-        self.expose_get_object();
-        self.expose_drop_ref();
-        self.global(
+        self.expose_get_object(import_deps);
+        self.expose_drop_ref(import_deps);
+        self.write_js_function(
             "
-            function takeObject(idx) {
                 const ret = getObject(idx);
                 dropObject(idx);
                 return ret;
-            }
-            ",
+            ", func_name, "(idx)", &["'$getObject'".to_string(), "'$dropObject'".to_string()],
         );
     }
 
@@ -2544,22 +2580,23 @@ __wbg_set_wasm(wasm);"
         &mut self,
         ty: VectorKind,
         memory: MemoryId,
+        import_deps: &mut HashSet<String>,
     ) -> Result<MemView, Error> {
         Ok(match ty {
             VectorKind::String => self.expose_get_string_from_wasm(memory)?,
-            VectorKind::I8 => self.expose_get_array_i8_from_wasm(memory),
-            VectorKind::U8 => self.expose_get_array_u8_from_wasm(memory),
-            VectorKind::ClampedU8 => self.expose_get_clamped_array_u8_from_wasm(memory),
-            VectorKind::I16 => self.expose_get_array_i16_from_wasm(memory),
-            VectorKind::U16 => self.expose_get_array_u16_from_wasm(memory),
-            VectorKind::I32 => self.expose_get_array_i32_from_wasm(memory),
-            VectorKind::U32 => self.expose_get_array_u32_from_wasm(memory),
-            VectorKind::I64 => self.expose_get_array_i64_from_wasm(memory),
-            VectorKind::U64 => self.expose_get_array_u64_from_wasm(memory),
-            VectorKind::F32 => self.expose_get_array_f32_from_wasm(memory),
-            VectorKind::F64 => self.expose_get_array_f64_from_wasm(memory),
-            VectorKind::Externref => self.expose_get_array_js_value_from_wasm(memory)?,
-            VectorKind::NamedExternref(_) => self.expose_get_array_js_value_from_wasm(memory)?,
+            VectorKind::I8 => self.expose_get_array_i8_from_wasm(memory, import_deps),
+            VectorKind::U8 => self.expose_get_array_u8_from_wasm(memory, import_deps),
+            VectorKind::ClampedU8 => self.expose_get_clamped_array_u8_from_wasm(memory, import_deps) ,
+            VectorKind::I16 => self.expose_get_array_i16_from_wasm(memory, import_deps),
+            VectorKind::U16 => self.expose_get_array_u16_from_wasm(memory, import_deps),
+            VectorKind::I32 => self.expose_get_array_i32_from_wasm(memory, import_deps),
+            VectorKind::U32 => self.expose_get_array_u32_from_wasm(memory, import_deps),
+            VectorKind::I64 => self.expose_get_array_i64_from_wasm(memory, import_deps),
+            VectorKind::U64 => self.expose_get_array_u64_from_wasm(memory, import_deps),
+            VectorKind::F32 => self.expose_get_array_f32_from_wasm(memory, import_deps),
+            VectorKind::F64 => self.expose_get_array_f64_from_wasm(memory, import_deps),
+            VectorKind::Externref => self.expose_get_array_js_value_from_wasm(memory, import_deps)?,
+            VectorKind::NamedExternref(_) => self.expose_get_array_js_value_from_wasm(memory, import_deps)?,
         })
     }
 
@@ -2806,7 +2843,7 @@ __wbg_set_wasm(wasm);"
                 $CLOSURE_DTORS: `(typeof FinalizationRegistry === 'undefined')
                     ? { register: () => {}, unregister: () => {} }
                 : new FinalizationRegistry(state => {
-                    wasmExports.['__indirect_function_table'].get(state.dtor)(state.a, state.b)
+                    wasmExports['__indirect_function_table'].get(state.dtor)(state.a, state.b)
                 })`,\n
                 ",
             );
@@ -2851,6 +2888,13 @@ __wbg_set_wasm(wasm);"
 
     fn write_js_function(&mut self, body: &str, func_name: &str, args: &str, deps: &[String]) {
         if matches!(self.config.mode, OutputMode::Emscripten) {
+            let re = Regex::new(r"(?:wasmExports|wasm)\.([a-zA-Z0-9_$]*)").unwrap();
+            let formatted_body = if let Some(_) = re.captures(body) {
+                re.replace_all(body, "wasmExports[\'$1\']").to_string()
+            } else {
+                body.to_string()
+            };
+
             self.emscripten_library(&format!(
                 "${}: function{} {{
                 {}
@@ -2858,7 +2902,7 @@ __wbg_set_wasm(wasm);"
                 ",
                 func_name,
                 args,
-                body.trim().replace("wasm.", "wasmExports.")
+                formatted_body.trim()
             ));
             if !deps.is_empty() {
                 self.emscripten_library.push_str(&format!(
