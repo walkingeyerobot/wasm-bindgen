@@ -10,6 +10,15 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wasm-bindgen = { path = "../../" }
+rand = "0.8.5"
+
+wasm-bindgen-futures = { path = '../../crates/futures' }
+js-sys = { path = "../../crates/js-sys", version = '=0.3.77', default-features = false }
+
+mls-rs = { path = "../../../mls-rs/mls-rs"}
+mls-rs-crypto-webcrypto = {path = "../../../mls-rs/mls-rs-crypto-webcrypto", version = '0.8'}
+getrandom = { version = "0.2", features = ["js"] }
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 
 [lints]
 workspace = true

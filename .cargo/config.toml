@@ -2,6 +2,10 @@
 runner = 'cargo run -p wasm-bindgen-cli --bin wasm-bindgen-test-runner --'
 
 [build]
+rustflags = [
+    "--cfg", 
+    "mls_build_async",
+]
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "emscripten"))']
 rustflags = [
@@ -10,3 +14,4 @@ rustflags = [
   "-Clink-arg=-Wno-undefined",
   "-Crelocation-model=static",
 ]
+
