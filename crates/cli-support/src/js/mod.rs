@@ -1599,7 +1599,7 @@ __wbg_set_wasm(wasm);"
         let mut mem_formatted = format!("{mem}()");
         if matches!(self.config.mode, OutputMode::Emscripten) {
             text_encoder = "textEncoder";
-            mem_formatted = "HEAP8".to_string();
+            mem_formatted = format!("{}", mem.name);
         };
         // The first implementation we have for this is to use
         // `TextEncoder#encode` which has been around for quite some time.
@@ -1896,7 +1896,7 @@ __wbg_set_wasm(wasm);"
         }
         self.expose_wasm_vector_len(import_deps);
         let view_formatted = if matches!(self.config.mode, OutputMode::Emscripten) {
-            "HEAP8"
+            &format!("{}", view.name) 
         } else {
             &format!("{view}()") 
         };
@@ -2036,10 +2036,10 @@ __wbg_set_wasm(wasm);"
                 "
                 ${}(ptr, len) {{
                     ptr = ptr >>> 0;
-                    return UTF8Decoder.decode(HEAP8.{}(ptr, ptr + len));
+                    return UTF8Decoder.decode({}.{}(ptr, ptr + len));
                 }},\n
                 ",
-                ret, method
+                ret, mem.name, method
             ));
         } else {
             self.global(&format!(
@@ -2116,7 +2116,7 @@ __wbg_set_wasm(wasm);"
         let mem_formatted = if matches!(self.config.mode, OutputMode::Emscripten) {
              format!("{mem}()")
         } else {
-            "HEAP_DATA_VIEW".to_string()
+            format!("{}", mem.name)
         };
         match (self.aux.externref_table, self.aux.externref_drop_slice) {
             (Some(table), Some(drop)) => {
@@ -2222,10 +2222,10 @@ __wbg_set_wasm(wasm);"
         if !self.should_write_global(name) {
             return ret;
         }
-        let mem = if matches!(self.config.mode, OutputMode::Emscripten) {
+        let mem = if !matches!(self.config.mode, OutputMode::Emscripten) {
             format!("{view}()")
         } else {
-            "HEAP8".to_string()
+            format!("{}", view.name)
         };
         import_deps.insert(format!("'${ret}'"));
         self.write_js_function(&format!(
@@ -2288,6 +2288,26 @@ __wbg_set_wasm(wasm);"
     }
 
     fn memview(&mut self, kind: &'static str, memory: walrus::MemoryId) -> MemView {
+        if matches!(self.config.mode, OutputMode::Emscripten) {
+            // Emscripten provides its own version of getMemory
+            // so don't write out the memory function.
+            // See https://emscripten.org/docs/api_reference/preamble.js.html#type-accessors-for-the-memory-model
+            // for more details.
+            let emscripten_heap: &'static str = match kind {
+                "Int8Array" => "HEAP8",
+                "Uint8Array" | "Uint8ClampedArray" => "HEAPU8",
+                "Int16Array" => "HEAP16",
+                "Uint16Array" => "HEAPU16",
+                "Int32Array" => "HEAP32",
+                "Uint32Array" => "HEAPU32",
+                "Float32Array" => "HEAPF32",
+                "Float64Array" => "HEAPF64",
+                "DataView" => "HEAP_DATA_VIEW",
+                _ => "",
+            };
+            return self.memview_memory(emscripten_heap, memory);
+        }
+
         let view = self.memview_memory(kind, memory);
         if !self.should_write_global(view.name.clone()) {
             return view;
@@ -2315,13 +2335,7 @@ __wbg_set_wasm(wasm);"
             format!("{cache}.byteLength === 0", cache = cache)
         };
 
-        if matches!(self.config.mode, OutputMode::Emscripten) {
-            // Emscripten provides its own version of getMemory
-            // so don't write out the memory function.
-            // See https://emscripten.org/docs/api_reference/preamble.js.html#type-accessors-for-the-memory-model
-            // for more details.
-            return view;
-        }
+        
         self.global(&format!("let {cache} = null;\n"));
 
         self.global(&format!(
@@ -2349,9 +2363,16 @@ __wbg_set_wasm(wasm);"
             .entry(memory)
             .or_insert((next, Default::default()));
         kinds.insert(kind);
-        MemView {
-            name: format!("get{}Memory", kind).into(),
-            num,
+        if matches!(self.config.mode, OutputMode::Emscripten) {
+            MemView {
+                name: format!("{}", kind).into(),
+                num,
+            }
+        } else {
+            MemView {
+                name: format!("get{}Memory", kind).into(),
+                num,
+            }
         }
     }
 
@@ -4359,7 +4380,10 @@ __wbg_set_wasm(wasm);"
                     );
                 }
                 drop(memories);
-                format!("wasm.{}", self.export_name_of(memory))
+                match self.config.mode {
+                    OutputMode::Emscripten { .. } => "HEAPU8".to_string(),
+                    _ => format!("wasm.{}", self.export_name_of(memory)),
+                }
             }
 
             Intrinsic::FunctionTable => {

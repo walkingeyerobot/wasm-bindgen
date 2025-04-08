@@ -1,9 +1,12 @@
+#![cfg(all(mls_build_async, target_arch = "wasm32"))]
 
 extern crate mls_rs_crypto_webcrypto;
+use mls_rs_crypto_webcrypto::WebCryptoProvider;
 
 use wasm_bindgen::prelude::*;
 use rand::Rng;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::future_to_promise;
 use mls_rs::{
     client_builder::{ClientBuilder, MlsConfig},
     error::MlsError,
@@ -13,13 +16,11 @@ use mls_rs::{
     },
     mls_rules::{CommitOptions, DefaultMlsRules},
     CipherSuite, CipherSuiteProvider, Client, CryptoProvider, ExtensionList,
-    
 };
 use mls_rs::ProtocolVersion;
 
-use mls_rs_crypto_webcrypto::WebCryptoProvider;
-
 const CIPHERSUITE: CipherSuite = CipherSuite::P256_AES128;
+
 
 
 async fn make_client<P: CryptoProvider + Clone>(
@@ -62,11 +63,11 @@ async fn make_client<P: CryptoProvider + Clone>(
 pub async fn basic_mlsrs_usage() -> Result<(), MlsError> {
     let crypto_provider = mls_rs_crypto_webcrypto::WebCryptoProvider::default();
 
-    // Create clients for Alice and Bob
+    // // Create clients for Alice and Bob
     let alice = make_client(crypto_provider.clone(), "alice").await?;
     let bob = make_client(crypto_provider.clone(), "bob").await?;
 
-    // Alice creates a new group.
+    // // Alice creates a new group.
     let bob_key_pkg = bob
     .generate_key_package_message(Default::default(), Default::default())
     .await
@@ -78,20 +79,21 @@ pub async fn basic_mlsrs_usage() -> Result<(), MlsError> {
     .await
     .unwrap();
 
-    let welcome = &alice_group
-        .commit_builder()
+    let commit_builder = alice_group.commit_builder();
+
+    let res = commit_builder
         .add_member(bob_key_pkg)
         .unwrap()
         .build()
         .await
-        .unwrap()
-        .welcome_messages[0];
+        .unwrap();
+    //     .welcome_messages[0];
 
-    // Upon server confirmation, alice applies the commit to her own state
-    alice_group.apply_pending_commit().await.unwrap();
+    // // Upon server confirmation, alice applies the commit to her own state
+    // alice_group.apply_pending_commit().await.unwrap();
 
-    // Bob receives the welcome message and joins the group
-    let (bob_group, _) = bob.join_group(None, welcome).await.unwrap();
+    // // Bob receives the welcome message and joins the group
+    // let (bob_group, _) = bob.join_group(None, welcome).await.unwrap();
 
     Ok(())
 }
