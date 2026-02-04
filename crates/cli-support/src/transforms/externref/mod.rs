@@ -174,6 +174,11 @@ impl Context {
             }
             to_delete.push(export.id());
         }
+
+        if heap_alloc.is_none() {
+            return Ok(Meta { table, alloc: None, drop: None, drop_slice: None });
+        }
+
         for id in to_delete {
             module.exports.delete(id);
         }
