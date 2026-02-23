@@ -106,6 +106,10 @@ pub struct Context<'a> {
 
     /// Tracks global emscripten dependencies as opposed to adapter-level dependencies.
     emscripten_global_deps: HashSet<String>,
+
+    /// Tracks the specific Emscripten dependencies for each individual Wasm import.
+    /// These are gathered from `adapter_deps` during adapter generation.
+    emscripten_import_deps: HashMap<ImportId, Vec<String>>,
 }
 
 /// Definition of a module export
@@ -223,6 +227,7 @@ impl<'a> Context<'a> {
             emscripten_library: String::new(),
             adapter_deps: HashSet::new(),
             emscripten_global_deps: HashSet::new(),
+            emscripten_import_deps: Default::default(),
         })
     }
 
@@ -242,7 +247,7 @@ impl<'a> Context<'a> {
 
         if matches!(self.config.mode, OutputMode::Emscripten) {
             let actual_js_name: &str = js_name.unwrap_or(&name);
-            self.adapter_deps.insert(format!("\'${actual_js_name}\'"));
+            self.adapter_deps.insert(format!("{actual_js_name}"));
 
             let mut content = val.replace("wasm.", "wasmExports.");
 
@@ -674,19 +679,19 @@ impl<'a> Context<'a> {
 
         // Inject Global Dependencies
         for global_dep in self.emscripten_global_deps.iter() {
-            if global_dep == "'$WASM_VECTOR_LEN'" {
+            if global_dep == "WASM_VECTOR_LEN" {
                 imports.push_str("$WASM_VECTOR_LEN: '0',\n");
-            } else if global_dep == "'$textEncoder'" {
-                imports.push_str("$textEncoder: \"new TextEncoder()\",\n");
-            } else if global_dep == "'$textDecoder'" {
-                imports.push_str("$textDecoder: \"new TextDecoder()\",\n");
-            } else if global_dep == "'$heap'" {
+            } else if global_dep == "cachedTextEncoder" {
+                imports.push_str("$cachedTextEncoder: \"new TextEncoder()\",\n");
+            } else if global_dep == "cachedTextDecoder" {
+                imports.push_str("$cachedTextDecoder: \"new TextDecoder()\",\n");
+            } else if global_dep == "heap" {
                 imports.push_str(&format!(
                     "$heap: \"new Array({}).fill(undefined)\",\n\"heap.push({})\",\n",
                     INITIAL_HEAP_OFFSET,
                     INITIAL_HEAP_VALUES.join(", ")
                 ));
-            } else if global_dep == "'$stack_pointer'" {
+            } else if global_dep == "stack_pointer" {
                 imports.push_str(&format!("$stack_pointer : \"{}\",\n", INITIAL_HEAP_OFFSET));
             }
         }
@@ -695,19 +700,19 @@ impl<'a> Context<'a> {
         for (id, js) in iter_by_import(&self.wasm_import_definitions, self.module) {
             let import = self.module.imports.get_mut(*id);
             import.module = "env".to_string();
-            imports.push_str(&import.name);
-            let trimmed_js = js.trim();
-            // Handle specific cases
-            if import.name == "__wbindgen_init_externref_table" {
-                let body = trimmed_js.strip_prefix("function()").unwrap_or(trimmed_js);
+            let name = &import.name;
+
+            let trimmed_js = js.trim().replace("wasm.", "wasmExports.");
+
+            imports.push_str(&format!("{name}: {trimmed_js},\n"));
+
+            if let Some(deps) = self.emscripten_import_deps.get(id) {
+                let formatted_deps: Vec<String> =
+                    deps.iter().map(|dep| format!("'${}'", dep)).collect();
+
                 imports.push_str(&format!(
-                    ": () => {},\n",
-                    body.replace("wasm.", "wasmExports.")
-                ));
-            } else {
-                imports.push_str(&format!(
-                    ": {},\n",
-                    trimmed_js.replace("wasm.", "wasmExports.")
+                    "  {name}__deps: [{}],\n",
+                    formatted_deps.join(", ")
                 ));
             }
         }
@@ -1153,17 +1158,14 @@ impl<'a> Context<'a> {
     ) -> String {
         let set_to_list = |set: &HashSet<String>| -> Vec<String> { set.iter().cloned().collect() };
         let deps: Vec<String> = set_to_list(&self.emscripten_global_deps);
+        let formatted_deps: Vec<String> = deps.iter().map(|dep| format!("'${}'", dep)).collect();
 
-        // We need to inject the start function logic here
         let start_logic = if needs_manual_start {
             "wasmExports.__wbindgen_start();"
         } else {
             ""
         };
 
-        // Note: 'globals' are handled in the main finalize loop, but we need to ensure
-        // the $initBindgen function can access them if they were emitted as "wasmExports".
-        // The formatting here matches your previous `finalize_js` structure.
         format!(
             r#"
             LibraryWbg.$initBindgen__deps = ['$addOnInit'];
@@ -1173,10 +1175,10 @@ impl<'a> Context<'a> {
                 {classes_and_exports}
             }};
             
-            extraLibraryFuncs.push('$initBindgen', '$addOnInit', {deps});
+            extraLibraryFuncs.push('$initBindgen', '$addOnInit', {});
             addToLibrary(LibraryWbg);
             "#,
-            deps = deps.join(", ")
+            formatted_deps.join(", ")
         )
     }
 
@@ -1708,7 +1710,7 @@ impl<'a> Context<'a> {
     fn expose_global_heap(&mut self) {
         assert!(!self.config.externref);
         if matches!(self.config.mode, OutputMode::Emscripten) {
-            self.emscripten_global_deps.insert("'$heap'".to_string());
+            self.emscripten_global_deps.insert("heap".to_string());
             return;
         }
         self.intrinsic(
@@ -1787,11 +1789,11 @@ impl<'a> Context<'a> {
     }
 
     fn expose_wasm_vector_len(&mut self) {
-        self.adapter_deps.insert("'$WASM_VECTOR_LEN'".to_string());
+        self.adapter_deps.insert("WASM_VECTOR_LEN".to_string());
 
         if matches!(self.config.mode, OutputMode::Emscripten) {
             self.emscripten_global_deps
-                .insert("'$WASM_VECTOR_LEN'".to_string());
+                .insert("WASM_VECTOR_LEN".to_string());
             self.intrinsic(
                 "wasm_vector_len".into(),
                 "WASM_VECTOR_LEN".into(),
@@ -1825,9 +1827,7 @@ impl<'a> Context<'a> {
         {
         let is_emscripten = matches!(self.config.mode, OutputMode::Emscripten);
 
-        // Emscripten uses the global 'textEncoder' and a global heap HEAPU8.
-        let text_encoder_var = if is_emscripten { "textEncoder" } else { "cachedTextEncoder" };
-        let mem_formatted = if is_emscripten { format!("{}", mem.name) } else { format!("{mem}()") };
+        let mem_formatted = mem.access(is_emscripten);
 
         let debug = if self.config.debug {
             "if (typeof(arg) !== 'string') throw new Error(`expected a string argument, found ${typeof(arg)}`);\n"
@@ -1840,10 +1840,19 @@ impl<'a> Context<'a> {
             ""
         };
 
+        // A fast path that directly writes char codes into Wasm memory as long
+        // as it finds only ASCII characters.
+        //
+        // This is much faster for common ASCII strings because it can avoid
+        // calling out into C++ TextEncoder code.
+        //
+        // This might be not very intuitive, but such calls are usually more
+        // expensive in mainstream engines than staying in the JS, and
+        // charCodeAt on ASCII strings is usually optimised to raw bytes.
         let encode_as_ascii = format!(
-            r#"
+            "
             if (realloc === undefined) {{
-                const buf = {text_encoder_var}.encode(arg);
+                const buf = cachedTextEncoder.encode(arg);
                 const ptr = malloc(buf.length, 1) >>> 0;
                 {mem_formatted}.subarray(ptr, ptr + buf.length).set(buf);
                 WASM_VECTOR_LEN = buf.length;
@@ -1860,8 +1869,7 @@ impl<'a> Context<'a> {
                 if (code > 0x7F) break;
                 mem[ptr + offset] = code;
             }}
-            "#
-        );
+            ");
 
         if is_emscripten {
             // Emscripten: Emit as Object Property + Dependency List
@@ -1875,7 +1883,7 @@ impl<'a> Context<'a> {
                         }}
                         ptr = realloc(ptr, len, len = offset + arg.length * 3, 1) >>> 0;
                         const view = {mem_formatted}.subarray(ptr + offset, ptr + len);
-                        const ret = {text_encoder_var}.encodeInto(arg, view);
+                        const ret = cachedTextEncoder.encodeInto(arg, view);
                         {debug_end}
                         offset += ret.written;
                         ptr = realloc(ptr, len, offset, 1) >>> 0;
@@ -1883,7 +1891,7 @@ impl<'a> Context<'a> {
                     WASM_VECTOR_LEN = offset;
                     return ptr;
                 }},
-                ${ret}__deps: ['$textEncoder', '$WASM_VECTOR_LEN']\n",
+                ${ret}__deps: ['$cachedTextEncoder', '$WASM_VECTOR_LEN']\n",
             ).into()
         } else {
             format!(
@@ -1896,7 +1904,7 @@ impl<'a> Context<'a> {
                         }}
                         ptr = realloc(ptr, len, len = offset + arg.length * 3, 1) >>> 0;
                         const view = {mem_formatted}.subarray(ptr + offset, ptr + len);
-                        const ret = {text_encoder_var}.encodeInto(arg, view);
+                        const ret = cachedTextEncoder.encodeInto(arg, view);
                         {debug_end}
                         offset += ret.written;
                         ptr = realloc(ptr, len, offset, 1) >>> 0;
@@ -1949,6 +1957,7 @@ impl<'a> Context<'a> {
             num: mem.num,
         };
         self.expose_wasm_vector_len();
+        let mem_formatted: String = mem.access(self.config.mode.emscripten());
         match (self.aux.externref_table, self.aux.externref_alloc) {
             (Some(table), Some(alloc)) => {
                 // TODO: using `addToExternrefTable` goes back and forth between wasm
@@ -1956,17 +1965,13 @@ impl<'a> Context<'a> {
                 let add = self.expose_add_to_externref_table(table, alloc);
 
                 if self.config.mode.emscripten() {
-                    self.adapter_deps.insert("'${add}'".to_string());
+                    self.adapter_deps.insert("{add}".to_string());
                 }
 
                 self.intrinsic(ret.to_string().into(), None, {
-                    let loop_body = if self.config.mode.emscripten() {
-                        format!("HEAP32[ptr + 4 * i >> 2] = {add}(array[i]);")
-                    } else {
-                        format!(
-                            "const add = {add}(array[i]); {mem}().setUint32(ptr + 4 * i, add, true);"
-                        )
-                    };
+                    let loop_body = format!(
+                            "const add = {add}(array[i]); {mem_formatted}.setUint32(ptr + 4 * i, add, true);"
+                    );
                     format!(
                         "
                         function {ret}(array, malloc) {{
@@ -1985,18 +1990,10 @@ impl<'a> Context<'a> {
             _ => {
                 self.expose_add_heap_object();
                 self.intrinsic(ret.to_string().into(), None, {
-                    let (setup, loop_body) = if matches!(self.config.mode, OutputMode::Emscripten) {
-                        (
-                            "".to_string(),
-                            "HEAP32[ptr + 4 * i >> 2] = addHeapObject(array[i]);".to_string(),
-                        )
-                    } else {
-                        (
-                            format!("const mem = {mem}();"),
-                            "mem.setUint32(ptr + 4 * i, addHeapObject(array[i]), true);"
-                                .to_string(),
-                        )
-                    };
+                    let (setup, loop_body) = (
+                        format!("const mem = {mem_formatted};"),
+                        "mem.setUint32(ptr + 4 * i, addHeapObject(array[i]), true);".to_string(),
+                    );
 
                     format!(
                         "
@@ -2042,7 +2039,7 @@ impl<'a> Context<'a> {
 
     fn expose_text_encoder(&mut self, memory: MemoryId) {
         self.emscripten_global_deps
-            .insert("'$textEncoder'".to_string());
+            .insert("cachedTextEncoder".to_string());
         self.intrinsic("text_encoder".into(), "textEncoder".into(), {
             if matches!(self.config.mode, OutputMode::Emscripten) {
                 "".into()
@@ -2105,9 +2102,9 @@ impl<'a> Context<'a> {
 
     fn expose_text_decoder(&mut self, mem: &MemView, memory: MemoryId) {
         if matches!(self.config.mode, OutputMode::Emscripten) {
-            self.adapter_deps.insert("'$textDecoder'".to_string());
+            self.adapter_deps.insert("cachedTextDecoder".to_string());
             self.emscripten_global_deps
-                .insert("'$textDecoder'".to_string());
+                .insert("cachedTextDecoder".to_string());
         }
 
         self.intrinsic("text_decoder".into(), "decodeText".into(), {
@@ -2139,13 +2136,10 @@ impl<'a> Context<'a> {
             // creates just a view. That way in shared mode we copy more data but in
             // non-shared mode there's no need to copy the data except for the
             // string itself.
-            let text_decoder_decode = if matches!(self.config.mode, OutputMode::Emscripten) {
-                // Emscripten uses HEAPU8 and global textDecoder
-                "textDecoder.decode(HEAPU8.subarray(ptr, ptr + len))".to_string()
-            } else {
+            let text_decoder_decode = {
                 let is_shared = self.module.memories.get(memory).shared;
                 let method = if is_shared { "slice" } else { "subarray" };
-                format!("cachedTextDecoder.decode({mem}().{method}(ptr, ptr + len))")
+                format!("cachedTextDecoder.decode({}.{method}(ptr, ptr + len))", mem.access(self.config.mode.emscripten()))
             };
 
             match &self.config.mode {
@@ -2294,7 +2288,7 @@ impl<'a> Context<'a> {
     }
 
     fn expose_get_array_js_value_from_wasm(&mut self, memory: MemoryId) -> MemView {
-        let mem = self.expose_dataview_memory(memory);
+        let mem: MemView = self.expose_dataview_memory(memory);
         let ret = MemView {
             name: "getArrayJsValueFromWasm".into(),
             num: mem.num,
@@ -2455,11 +2449,7 @@ impl<'a> Context<'a> {
             name: name.into(),
             num: view.num,
         };
-        let heap_view = if self.config.mode.emscripten() {
-            format!("{}", view.name)
-        } else {
-            format!("{view}()")
-        };
+        let heap_view = view.access(self.config.mode.emscripten());
         self.intrinsic(name.into(), Some(&ret.to_string()), {
             format!(
                 "
@@ -2540,10 +2530,6 @@ impl<'a> Context<'a> {
                 "DataView" => "HEAP_DATA_VIEW",
                 _ => "HEAPU8",
             };
-            // Emscripten provides its own version of getMemory
-            // so don't write out the memory function.
-            // See https://emscripten.org/docs/api_reference/preamble.js.html#type-accessors-for-the-memory-model
-            // for more details.
             let view = self.memview_memory(emscripten_heap, memory);
             return view;
         }
@@ -2627,7 +2613,7 @@ impl<'a> Context<'a> {
     fn expose_global_stack_pointer(&mut self) {
         if matches!(self.config.mode, OutputMode::Emscripten) {
             self.emscripten_global_deps
-                .insert("'$stack_pointer'".to_string());
+                .insert("stack_pointer".to_string());
             return;
         }
         self.intrinsic("stack_pointer".into(), None, {
@@ -2730,7 +2716,7 @@ impl<'a> Context<'a> {
             _ => {
                 self.expose_add_heap_object();
                 if self.config.mode.emscripten() {
-                    self.adapter_deps.insert("'$addHeapObject'".to_string());
+                    self.adapter_deps.insert("addHeapObject".to_string());
                 }
                 self.intrinsic("handle_error".into(), "handleError".into(), {
                     format!(
@@ -2878,7 +2864,7 @@ impl<'a> Context<'a> {
 
         if matches!(self.config.mode, OutputMode::Emscripten) {
             self.emscripten_global_deps
-                .insert("'$CLOSURE_DTORS'".to_string());
+                .insert("CLOSURE_DTORS".to_string());
         }
         // For mutable closures they can't be invoked recursively.
         // To handle that we swap out the `this.a` pointer with zero
@@ -2971,7 +2957,7 @@ impl<'a> Context<'a> {
         self.expose_closure_finalization();
         if matches!(self.config.mode, OutputMode::Emscripten) {
             self.emscripten_global_deps
-                .insert("'$CLOSURE_DTORS'".to_string());
+                .insert("CLOSURE_DTORS".to_string());
         }
         // For shared closures they can be invoked recursively so we
         // just immediately pass through `this.a`. If we end up
@@ -3746,7 +3732,7 @@ impl<'a> Context<'a> {
                 }
             }
             ContextAdapterKind::Import(core) => {
-                let mut code = if catch {
+                let code = if catch {
                     format!("function() {{ return handleError(function {code}, arguments); }}")
                 } else if log_error {
                     format!("function() {{ return logError(function {code}, arguments); }}")
@@ -3760,16 +3746,12 @@ impl<'a> Context<'a> {
                     let mut import_deps_vec = self
                         .adapter_deps
                         .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<&str>>();
-                    // sort to generate deterministic output.
+                        .map(|s| s.to_string())
+                        .collect::<Vec<String>>();
+
                     import_deps_vec.sort();
-                    let deps: String = format!(
-                        "{}__deps:  [{}]\n",
-                        self.module.imports.get(core).name,
-                        import_deps_vec.join(",")
-                    );
-                    code = format!("{},\n{}\n", code, deps);
+
+                    self.emscripten_import_deps.insert(core, import_deps_vec);
                 }
 
                 self.wasm_import_definitions.insert(core, code);
@@ -4031,7 +4013,7 @@ impl<'a> Context<'a> {
             let re = Regex::new(r"([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(").unwrap();
             for arg in args {
                 if let Some(result) = re.captures(arg) {
-                    self.adapter_deps.insert(format!("'${}'", &result[1]));
+                    self.adapter_deps.insert(format!("{}", &result[1]));
                 }
             }
         }
@@ -4602,7 +4584,7 @@ impl<'a> Context<'a> {
             Intrinsic::DebugString => {
                 assert_eq!(args.len(), 1);
                 self.expose_debug_string();
-                self.adapter_deps.insert("'$debugString'".to_string());
+                self.adapter_deps.insert("debugString".to_string());
                 format!("debugString({})", args[0])
             }
 
@@ -5384,6 +5366,18 @@ impl ExportedClass {
 struct MemView {
     name: Cow<'static, str>,
     num: usize,
+}
+
+impl MemView {
+    /// Formats the MemView specifically for accessing the memory buffer directly
+    fn access(&self, is_emscripten: bool) -> String {
+        if is_emscripten {
+            // Emscripten global arrays (e.g., "HEAPU8") don't use the num suffix
+            self.name.to_string()
+        } else {
+            format!("{self}()")
+        }
+    }
 }
 
 impl fmt::Display for MemView {
