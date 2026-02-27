@@ -88,14 +88,14 @@ const _: () = {
 
 macro_rules! externs {
     ($(#[$attr:meta])* extern "C" { $(fn $name:ident($($args:tt)*) -> $ret:ty;)* }) => (
-        #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten")))]
+        #[cfg(all(target_arch = "wasm32"))]
         $(#[$attr])*
         extern "C" {
             $(fn $name($($args)*) -> $ret;)*
         }
 
         $(
-            #[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none", target_os = "emscripten"))))]
+            #[cfg(not(all(target_arch = "wasm32")))]
             #[allow(unused_variables)]
             unsafe extern "C" fn $name($($args)*) -> $ret {
                 panic!("function not implemented on non-wasm32 targets")
@@ -1520,8 +1520,7 @@ pub trait UnwrapThrowExt<T>: Sized {
         any(
             debug_assertions,
             not(all(
-                target_arch = "wasm32",
-                any(target_os = "unknown", target_os = "none", target_os = "emscripten")
+                target_arch = "wasm32"
             ))
         ),
         track_caller
@@ -1530,12 +1529,7 @@ pub trait UnwrapThrowExt<T>: Sized {
         if cfg!(all(
             debug_assertions,
             all(
-                target_arch = "wasm32",
-                any(
-                    target_os = "unknown",
-                    target_os = "none",
-                    target_os = "emscripten"
-                )
+                target_arch = "wasm32"
             )
         )) {
             let loc = core::panic::Location::caller();
@@ -1559,8 +1553,7 @@ pub trait UnwrapThrowExt<T>: Sized {
         any(
             debug_assertions,
             not(all(
-                target_arch = "wasm32",
-                any(target_os = "unknown", target_os = "none", target_os = "emscripten")
+                target_arch = "wasm32"
             ))
         ),
         track_caller
@@ -1573,12 +1566,7 @@ impl<T> UnwrapThrowExt<T> for Option<T> {
         const MSG: &str = "called `Option::unwrap_throw()` on a `None` value";
 
         if cfg!(all(
-            target_arch = "wasm32",
-            any(
-                target_os = "unknown",
-                target_os = "none",
-                target_os = "emscripten"
-            )
+            target_arch = "wasm32"
         )) {
             if let Some(val) = self {
                 val
@@ -1597,12 +1585,7 @@ impl<T> UnwrapThrowExt<T> for Option<T> {
 
     fn expect_throw(self, message: &str) -> T {
         if cfg!(all(
-            target_arch = "wasm32",
-            any(
-                target_os = "unknown",
-                target_os = "none",
-                target_os = "emscripten"
-            )
+            target_arch = "wasm32"
         )) {
             if let Some(val) = self {
                 val
@@ -1629,12 +1612,7 @@ where
         const MSG: &str = "called `Result::unwrap_throw()` on an `Err` value";
 
         if cfg!(all(
-            target_arch = "wasm32",
-            any(
-                target_os = "unknown",
-                target_os = "none",
-                target_os = "emscripten"
-            )
+            target_arch = "wasm32"
         )) {
             match self {
                 Ok(val) => val,
@@ -1661,12 +1639,7 @@ where
 
     fn expect_throw(self, message: &str) -> T {
         if cfg!(all(
-            target_arch = "wasm32",
-            any(
-                target_os = "unknown",
-                target_os = "none",
-                target_os = "emscripten"
-            )
+            target_arch = "wasm32"
         )) {
             match self {
                 Ok(val) => val,
@@ -1857,3 +1830,10 @@ impl<T: VectorIntoWasmAbi> From<Clamped<Vec<T>>> for JsValue {
         JsValue::from(Clamped(vector.0.into_boxed_slice()))
     }
 }
+
+#[cfg(target_os = "emscripten")]
+#[doc(hidden)]
+#[used]
+#[link_section = "__wasm_bindgen_emscripten_marker"]
+/// A custom data section used to detect Emscripten.
+pub static __WASM_BINDGEN_EMSCRIPTEN_MARKER: [u8; 1] = [1];

@@ -233,9 +233,10 @@ impl Bindgen {
         Ok(self)
     }
 
+    /// This is only intended to be called within cli-support.
     pub fn emscripten(&mut self, emscripten: bool) -> Result<&mut Bindgen, Error> {
         if emscripten {
-            self.switch_mode(OutputMode::Emscripten, "--target emscripten")?;
+            self.switch_mode(OutputMode::Emscripten, "")?;
         }
         Ok(self)
     }
@@ -338,6 +339,11 @@ impl Bindgen {
                 .module_from_bytes(bytes)
                 .context("failed getting Wasm module")?,
         };
+
+        if module.customs.remove_raw("__wasm_bindgen_emscripten_marker").is_some() {
+            // Force the internal configuration to Emscripten mode.
+            let _ = self.emscripten(true);
+        }
 
         // Enable reference type transformations if the module is already using it.
         if let Ok(true) = wasm_conventions::target_feature(&module, "reference-types") {
