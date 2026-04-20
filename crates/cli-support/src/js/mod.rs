@@ -1427,7 +1427,7 @@ if (require('worker_threads').isMainThread) {{
             .collect();
 
         let start_logic = if needs_manual_start {
-            "wasmExports.__wbindgen_start();"
+            "___wbindgen_start();"
         } else {
             ""
         };
@@ -1441,8 +1441,8 @@ if (require('worker_threads').isMainThread) {{
                     wasm = wasmExports;
                     // Call emscripten's _initialize to run static constructors
                     // (needed for --no-entry builds)
-                    if (wasmExports['_initialize']) {{
-                        wasmExports['_initialize']();
+                    if (wasm['_initialize']) {{
+                        wasm['_initialize']();
                     }}
                     {start_logic}
                     {classes_and_exports}
@@ -1692,7 +1692,7 @@ if (require('worker_threads').isMainThread) {{
         }
 
         let mut free = format!(
-            "wasm.{}(ptr, 0)",
+            "_{}(ptr, 0)",
             wasm_bindgen_shared::free_function(qualified)
         );
         free = binding::maybe_wrap_export_call(
@@ -5144,7 +5144,7 @@ addToLibrary({
                 let name = self.export_name_of(table);
 
                 if matches!(self.config.mode, OutputMode::Emscripten) {
-                    base.push_str(&format!("const table = wasmExports['{name}'];\n"));
+                    base.push_str(&format!("const table = _{name};\n"));
                 } else {
                     base.push_str(&format!("const table = wasm.{name};\n"));
                 }
@@ -5155,7 +5155,7 @@ addToLibrary({
                 // returns `undefined` for types like `None` going out.
                 let mut base = format!(
                     "
-                      const table = wasm.{name};
+                      const table = _{name};
                       const offset = table.grow({});
                       table.set(0, undefined);
                     ",
