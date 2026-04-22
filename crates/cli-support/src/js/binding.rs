@@ -1781,7 +1781,7 @@ impl Invocation {
                     Some(eid) => cx.module.exports.get(*eid).name.clone(),
                     None => cx.export_name_of(*id),
                 };
-                Ok(format!("wasm.{name}({})", args.join(", ")))
+                Ok(format!("wasm['{name}']({})", args.join(", ")))
             }
             Invocation::Adapter(id) => {
                 let adapter = &cx.wit.adapters[id];

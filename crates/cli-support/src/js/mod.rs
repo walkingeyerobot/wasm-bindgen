@@ -1427,7 +1427,7 @@ if (require('worker_threads').isMainThread) {{
             .collect();
 
         let start_logic = if needs_manual_start {
-            "wasmExports.__wbindgen_start();"
+            "wasm['__wbindgen_start']();"
         } else {
             ""
         };
@@ -1441,8 +1441,8 @@ if (require('worker_threads').isMainThread) {{
                     wasm = wasmExports;
                     // Call emscripten's _initialize to run static constructors
                     // (needed for --no-entry builds)
-                    if (wasmExports['_initialize']) {{
-                        wasmExports['_initialize']();
+                    if (wasm['_initialize']) {{
+                        wasm['_initialize']();
                     }}
                     {start_logic}
                     {classes_and_exports}
@@ -1692,7 +1692,7 @@ if (require('worker_threads').isMainThread) {{
         }
 
         let mut free = format!(
-            "wasm.{}(ptr, 0)",
+            "wasm['{}'](ptr, 0)",
             wasm_bindgen_shared::free_function(qualified)
         );
         free = binding::maybe_wrap_export_call(
@@ -3467,7 +3467,7 @@ if (require('worker_threads').isMainThread) {{
             "{abort_reset}
             const wasmInstance = new WebAssembly.Instance(wasmModule, __wbg_get_imports());
             wasm = wasmInstance.exports;
-            wasm.__wbindgen_start();
+            wasm['__wbindgen_start']();
             "
         ));
 
@@ -3932,7 +3932,8 @@ addToLibrary({
     /// - If neither features are required, no call guard is emitted.
     fn maybe_generate_call_guard(&mut self) -> Result<(), Error> {
         // No call guard needed when we dont have hard aborts or reinit
-        if self.aux.wrapped_js_tag.is_none() && !self.generate_reinit {
+        if matches!(self.config.mode, OutputMode::Emscripten) || 
+            self.aux.wrapped_js_tag.is_none() && !self.generate_reinit {
             return Ok(());
         }
 
@@ -5143,11 +5144,7 @@ addToLibrary({
                 let mut base = "\n".to_string();
                 let name = self.export_name_of(table);
 
-                if matches!(self.config.mode, OutputMode::Emscripten) {
-                    base.push_str(&format!("const table = wasmExports['{name}'];\n"));
-                } else {
-                    base.push_str(&format!("const table = wasm.{name};\n"));
-                }
+                base.push_str(&format!("const table = wasm['{name}'];\n"));
 
                 // Grow the table to insert our initial values, and then also
                 // set the 0th slot to `undefined` since that's what we've
@@ -5155,7 +5152,7 @@ addToLibrary({
                 // returns `undefined` for types like `None` going out.
                 let mut base = format!(
                     "
-                      const table = wasm.{name};
+                      const table = wasm['{name}'];
                       const offset = table.grow({});
                       table.set(0, undefined);
                     ",
